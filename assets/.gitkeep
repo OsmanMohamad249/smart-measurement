@@ -1,0 +1,7 @@
+# Assets
+
+This directory contains assets for the Smart Measurement app.
+
+## Expected files:
+- `yolov8_pose.tflite` - YOLOv8 pose estimation model
+- Additional model files as needed
