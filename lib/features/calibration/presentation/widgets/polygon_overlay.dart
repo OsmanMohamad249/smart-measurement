@@ -97,6 +97,13 @@ class PolygonOverlayPainter extends CustomPainter {
   final bool showDefaultGuide;
   final double pulseValue;
 
+  // Layout constants for bracket positioning
+  static const double _bracketLengthRatio = 0.08;
+  static const double _horizontalMarginRatio = 0.1;
+  static const double _topMarginRatio = 0.08;
+  static const double _bottomMarginRatio = 0.92;
+  static const double _bracketStrokeMultiplier = 1.5;
+
   PolygonOverlayPainter({
     this.polygonPoints,
     required this.borderColor,
@@ -105,6 +112,16 @@ class PolygonOverlayPainter extends CustomPainter {
     required this.showDefaultGuide,
     required this.pulseValue,
   });
+
+  /// Creates a stroke paint with the standard configuration.
+  Paint _createStrokePaint({double? strokeWidth}) {
+    return Paint()
+      ..color = borderColor
+      ..strokeWidth = strokeWidth ?? borderWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -118,12 +135,7 @@ class PolygonOverlayPainter extends CustomPainter {
   void _drawCustomPolygon(Canvas canvas, Size size) {
     if (polygonPoints == null || polygonPoints!.length < 3) return;
 
-    final paint = Paint()
-      ..color = borderColor
-      ..strokeWidth = borderWidth
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    final paint = _createStrokePaint();
 
     final path = Path();
     path.moveTo(
@@ -157,12 +169,7 @@ class PolygonOverlayPainter extends CustomPainter {
     final bottomY = size.height * 0.9;
     final bodyWidth = size.width * 0.35;
 
-    final paint = Paint()
-      ..color = borderColor
-      ..strokeWidth = borderWidth
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    final paint = _createStrokePaint();
 
     // Draw body outline guide
     final path = Path();
@@ -264,16 +271,14 @@ class PolygonOverlayPainter extends CustomPainter {
   }
 
   void _drawCornerBrackets(Canvas canvas, Size size, Paint paint) {
-    final bracketLength = size.width * 0.08;
-    final margin = size.width * 0.1;
-    final topMargin = size.height * 0.08;
-    final bottomMargin = size.height * 0.92;
+    final bracketLength = size.width * _bracketLengthRatio;
+    final margin = size.width * _horizontalMarginRatio;
+    final topMargin = size.height * _topMarginRatio;
+    final bottomMargin = size.height * _bottomMarginRatio;
 
-    final bracketPaint = Paint()
-      ..color = borderColor
-      ..strokeWidth = borderWidth * 1.5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+    final bracketPaint = _createStrokePaint(
+      strokeWidth: borderWidth * _bracketStrokeMultiplier,
+    );
 
     // Top-left bracket
     canvas.drawLine(
