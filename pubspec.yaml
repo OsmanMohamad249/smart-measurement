@@ -1,0 +1,36 @@
+name: smart_measurement
+description: A precise AI-powered body measurement app using Flutter & Edge AI
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+  camera: ^0.10.5+9
+  flutter_tts: ^3.8.5
+  tflite_flutter: ^0.10.4
+  permission_handler: ^11.1.0
+  path_provider: ^2.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  build_runner: ^2.4.8
+  riverpod_generator: ^2.3.9
+  mockito: ^5.4.4
+  build_test: ^2.2.2
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
