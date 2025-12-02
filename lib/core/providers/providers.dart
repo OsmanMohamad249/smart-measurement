@@ -109,6 +109,7 @@ class CalibrationState {
   final double? referenceHeight;
   final List<PoseDetectionResult> calibrationData;
   final String? statusMessage;
+  final double? mmPerPixel;
 
   const CalibrationState({
     this.currentStep = CalibrationStep.initial,
@@ -116,6 +117,7 @@ class CalibrationState {
     this.referenceHeight,
     this.calibrationData = const [],
     this.statusMessage,
+    this.mmPerPixel,
   });
 
   CalibrationState copyWith({
@@ -124,6 +126,7 @@ class CalibrationState {
     double? referenceHeight,
     List<PoseDetectionResult>? calibrationData,
     String? statusMessage,
+    double? Function()? mmPerPixel,
   }) {
     return CalibrationState(
       currentStep: currentStep ?? this.currentStep,
@@ -131,6 +134,7 @@ class CalibrationState {
       referenceHeight: referenceHeight ?? this.referenceHeight,
       calibrationData: calibrationData ?? this.calibrationData,
       statusMessage: statusMessage ?? this.statusMessage,
+      mmPerPixel: mmPerPixel != null ? mmPerPixel() : this.mmPerPixel,
     );
   }
 }
@@ -154,6 +158,7 @@ class CalibrationStateNotifier extends StateNotifier<CalibrationState> {
     state = state.copyWith(
       currentStep: CalibrationStep.positioning,
       statusMessage: 'Position yourself in front of the camera',
+      mmPerPixel: () => null,
     );
   }
 
@@ -177,12 +182,18 @@ class CalibrationStateNotifier extends StateNotifier<CalibrationState> {
     );
   }
 
+  /// Persists the computed scale factor (mm per pixel).
+  void setScaleFactor(double scaleFactor) {
+    state = state.copyWith(mmPerPixel: () => scaleFactor);
+  }
+
   /// Completes calibration.
-  void completeCalibration() {
+  void completeCalibration({double? mmPerPixel}) {
     state = state.copyWith(
       currentStep: CalibrationStep.complete,
       isCalibrated: true,
       statusMessage: 'Calibration complete',
+      mmPerPixel: () => mmPerPixel ?? state.mmPerPixel,
     );
   }
 
