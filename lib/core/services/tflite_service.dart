@@ -1,440 +1,325 @@
-import 'dart:math';
 import 'dart:typed_data';
-
+import 'dart:ui';
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:image/image.dart' as img;
+import '../utils/tensor_data_fix.dart';
 
-import '../utils/geometry_utils.dart';
+/// Simple point class for card corners
+class CardPoint {
+  final double x;
+  final double y;
 
-/// Service for TensorFlow Lite model inference with YOLOv8.
+  const CardPoint(this.x, this.y);
+}
+
+/// Result from TFLite pose detection inference
+class PoseDetectionResult {
+  final List<Map<String, dynamic>> keypoints;
+  final double confidence;
+  final DateTime timestamp;
+  final List<CardPoint> cardCorners;
+
+  PoseDetectionResult({
+    required this.keypoints,
+    required this.confidence,
+    required this.timestamp,
+    this.cardCorners = const [],
+  });
+
+  bool get isValid => keypoints.isNotEmpty && confidence > 0.3;
+}
+
+/// TFLite-based pose detection service
+/// Replaces OnnxInferenceService with clean TFLite implementation
 class TFLiteService {
-  bool _isInitialized = false;
   Interpreter? _interpreter;
-  List<int>? _inputShape;
-  List<int>? _outputShape;
+  List<String> _labels = [];
+  bool _isInitialized = false;
 
-  static const int inputSize = 640;
-  static const double confidenceThreshold = 0.5;
+  // Model configuration
+  static const String _modelPath = 'assets/models/best.tflite';
+  static const String _labelsPath = 'assets/models/labels.txt';
+
+  // YOLO model input/output specs (adjust based on your model)
+  static const int _inputSize = 640; // Standard YOLO input
+  static const int _numChannels = 3; // RGB
 
   bool get isInitialized => _isInitialized;
 
-  Future<void> initialize({String modelPath = 'assets/yolov8_pose.tflite'}) async {
+  /// Initialize the TFLite interpreter and load model
+  Future<void> initialize() async {
     try {
-      final options = InterpreterOptions()..threads = 2;
-      _interpreter = await Interpreter.fromAsset(modelPath, options: options);
-      _inputShape = _interpreter!.getInputTensor(0).shape;
-      _outputShape = _interpreter!.getOutputTensor(0).shape;
+      debugPrint('TFLiteService: Initializing...');
+
+      // Load labels
+      await _loadLabels();
+
+      // Load model
+      _interpreter = await Interpreter.fromAsset(_modelPath);
+
+      // Print model info
+      final inputTensors = _interpreter!.getInputTensors();
+      final outputTensors = _interpreter!.getOutputTensors();
+
+      debugPrint('TFLiteService: Input tensors:');
+      for (var tensor in inputTensors) {
+        debugPrint('  Shape: ${tensor.shape}, Type: ${tensor.type}');
+      }
+
+      debugPrint('TFLiteService: Output tensors:');
+      for (var tensor in outputTensors) {
+        debugPrint('  Shape: ${tensor.shape}, Type: ${tensor.type}');
+      }
+
       _isInitialized = true;
-      debugPrint('TFLiteService initialized with model: $modelPath');
+      debugPrint('TFLiteService: Initialized successfully');
+
     } catch (e) {
+      debugPrint('TFLiteService initialization failed: $e');
       _isInitialized = false;
-      debugPrint('TFLiteService initialization error: $e');
       rethrow;
     }
   }
 
-  Future<CalibrationResult?> runInference(CameraImage image) async {
+  /// Load labels from assets
+  Future<void> _loadLabels() async {
+    try {
+      final labelsData = await rootBundle.loadString(_labelsPath);
+      _labels = labelsData.split('\n').where((label) => label.trim().isNotEmpty).toList();
+      debugPrint('TFLiteService: Loaded ${_labels.length} labels');
+    } catch (e) {
+      debugPrint('TFLiteService: Failed to load labels: $e');
+      _labels = ['person']; // Default for pose detection
+    }
+  }
+
+  /// Run inference on a camera image
+  Future<PoseDetectionResult> runInference(CameraImage cameraImage) async {
     if (!_isInitialized || _interpreter == null) {
       debugPrint('TFLiteService not initialized');
-      return null;
+      throw Exception('TFLiteService not initialized. Call initialize() first.');
     }
 
     try {
-      final inputBuffer = await _preprocessImage(image);
-      final outputLength =
-          _outputShape?.fold<int>(1, (value, dim) => value * dim) ?? 0;
-      if (outputLength == 0) {
-        debugPrint('TFLiteService output shape unavailable');
-        return null;
+      // Convert CameraImage to img.Image
+      final image = _convertCameraImage(cameraImage);
+      if (image == null) {
+        throw Exception('Failed to convert camera image');
       }
 
-      final outputBuffer = Float32List(outputLength);
-      _interpreter!.run(inputBuffer, outputBuffer);
+      // Preprocess image
+      final input = _preprocessImage(image);
 
-      final corners =
-          _extractCardCorners(outputBuffer, image.width, image.height);
-      if (!GeometryUtils.isCardShapeValid(corners)) {
-        debugPrint('Discarded inference due to invalid card geometry');
-        return null;
-      }
+      // Prepare output buffers
+      final output = _prepareOutputBuffer();
 
-      final scaleFactor = GeometryUtils.calculateScaleFactor(corners);
-      final keypoints =
-          _extractKeypoints(outputBuffer, image.width, image.height);
-      final boundingBox =
-          _calculateBoundingBox(keypoints, image.width, image.height);
-      final confidence = _averageConfidence(keypoints);
+      // Run inference
+      _interpreter!.run(input, output);
 
-      final poseResult = PoseDetectionResult(
-        keypoints: keypoints,
-        boundingBox: boundingBox,
-        confidence: confidence,
-      );
+      // Post-process results
+      final result = _postProcessOutput(output);
 
-      return CalibrationResult(
-        poseResult: poseResult,
-        cardCorners: corners,
-        scaleFactor: scaleFactor,
-      );
+      return result;
+
     } catch (e) {
       debugPrint('TFLiteService inference error: $e');
+      rethrow;
+    }
+  }
+
+  /// Convert CameraImage to img.Image
+  img.Image? _convertCameraImage(CameraImage cameraImage) {
+    try {
+      // Get image dimensions
+      final width = cameraImage.width;
+      final height = cameraImage.height;
+
+      // Create image based on format
+      if (cameraImage.format.group == ImageFormatGroup.yuv420) {
+        // YUV420 format (most common on Android)
+        final yPlane = cameraImage.planes[0];
+        final uPlane = cameraImage.planes[1];
+        final vPlane = cameraImage.planes[2];
+
+        final image = img.Image(width: width, height: height);
+
+        for (int y = 0; y < height; y++) {
+          for (int x = 0; x < width; x++) {
+            final yIndex = y * yPlane.bytesPerRow + x;
+            final uvIndex = (y ~/ 2) * uPlane.bytesPerRow + (x ~/ 2);
+
+            final yValue = yPlane.bytes[yIndex];
+            final uValue = uPlane.bytes[uvIndex];
+            final vValue = vPlane.bytes[uvIndex];
+
+            // YUV to RGB conversion
+            final r = (yValue + 1.402 * (vValue - 128)).clamp(0, 255).toInt();
+            final g = (yValue - 0.344136 * (uValue - 128) - 0.714136 * (vValue - 128))
+                .clamp(0, 255)
+                .toInt();
+            final b = (yValue + 1.772 * (uValue - 128)).clamp(0, 255).toInt();
+
+            image.setPixelRgb(x, y, r, g, b);
+          }
+        }
+
+        return image;
+      } else if (cameraImage.format.group == ImageFormatGroup.bgra8888) {
+        // BGRA format (common on iOS)
+        final bytes = cameraImage.planes[0].bytes;
+        return img.Image.fromBytes(
+          width: width,
+          height: height,
+          bytes: bytes.buffer,
+          order: img.ChannelOrder.bgra,
+        );
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('Error converting camera image: $e');
       return null;
     }
   }
 
-  Future<Float32List> _preprocessImage(CameraImage image) async {
-    final payload = _SerializableCameraImage.fromCameraImage(image);
-    final rgbaBytes = await compute(_convertYuv420ToRgbaBytes, payload);
-    final rgbaImage = img.Image.fromBytes(
-      width: payload.width,
-      height: payload.height,
-      bytes: rgbaBytes,
-      numChannels: 4,
-    );
-
+  /// Preprocess image to model input format
+  Float32List _preprocessImage(img.Image image) {
+    // Resize to model input size
     final resized = img.copyResize(
-      rgbaImage,
-      width: inputSize,
-      height: inputSize,
-      interpolation: img.Interpolation.average,
+      image,
+      width: _inputSize,
+      height: _inputSize,
+      interpolation: img.Interpolation.linear,
     );
 
-    final Float32List input = Float32List(inputSize * inputSize * 3);
-    int bufferIndex = 0;
-    for (int y = 0; y < inputSize; y++) {
-      for (int x = 0; x < inputSize; x++) {
+    // Convert to normalized float array [1, height, width, channels]
+    final input = Float32List(1 * _inputSize * _inputSize * _numChannels);
+    int pixelIndex = 0;
+
+    for (int y = 0; y < _inputSize; y++) {
+      for (int x = 0; x < _inputSize; x++) {
         final pixel = resized.getPixel(x, y);
-        input[bufferIndex++] = img.getRed(pixel) / 255.0;
-        input[bufferIndex++] = img.getGreen(pixel) / 255.0;
-        input[bufferIndex++] = img.getBlue(pixel) / 255.0;
+
+        // Normalize to [0, 1] range
+        input[pixelIndex++] = pixel.r / 255.0;
+        input[pixelIndex++] = pixel.g / 255.0;
+        input[pixelIndex++] = pixel.b / 255.0;
       }
     }
 
     return input;
   }
 
-  List<Point<double>> _extractCardCorners(
-    Float32List output,
-    int frameWidth,
-    int frameHeight,
-  ) {
-    if (output.length < 8) {
-      return const <Point<double>>[];
-    }
+  /// Prepare output buffer based on model output shape
+  Map<int, Object> _prepareOutputBuffer() {
+    // Get output tensor info
+    final outputTensor = _interpreter!.getOutputTensor(0);
+    final outputShape = outputTensor.shape;
 
-    final corners = <Point<double>>[];
-    for (int i = 0; i < 4; i++) {
-      final x = output[i * 2].clamp(0.0, 1.0) * frameWidth;
-      final y = output[i * 2 + 1].clamp(0.0, 1.0) * frameHeight;
-      corners.add(Point<double>(x, y));
-    }
-    return corners;
+    debugPrint('TFLiteService: Output shape: $outputShape');
+
+    // For YOLO detection: typically [1, num_detections, num_classes + 5]
+    // For pose: might be [1, num_persons, num_keypoints, 3]
+
+    // Allocate buffer - adjust based on your model
+    final outputData = List.generate(
+      outputShape[0],
+      (_) => List.generate(
+        outputShape[1],
+        (_) => List.filled(outputShape.length > 2 ? outputShape[2] : 1, 0.0),
+      ),
+    );
+
+    return {0: outputData};
   }
 
-  List<Keypoint> _extractKeypoints(
-    Float32List output,
-    int frameWidth,
-    int frameHeight,
-  ) {
-    const int offset = 8; // first 8 values are the card corners
-    const int valuesPerKeypoint = 3; // x, y, confidence
+  /// Post-process model output to extract keypoints and card corners
+  PoseDetectionResult _postProcessOutput(Map<int, Object> output) {
+    final predictions = output[0] as List;
 
-    if (output.length <= offset) {
-      return const <Keypoint>[];
-    }
+    // Parse predictions to keypoints and card corners
+    // This depends on your specific model output format
+    final keypoints = <Map<String, dynamic>>[];
+    final cardCorners = <CardPoint>[];
+    double maxConfidence = 0.0;
 
-    final availableValues = output.length - offset;
-    final keypointCount =
-        min(Keypoint.keypointNames.length, availableValues ~/ valuesPerKeypoint);
+    // For YOLO object detection (card detection)
+    // Format typically: [batch, detections, (x, y, w, h, conf, ...)]
+    for (var detection in predictions[0] as List) {
+      final detectionList = detection as List;
 
-    final keypoints = <Keypoint>[];
-    for (int i = 0; i < keypointCount; i++) {
-      final baseIndex = offset + i * valuesPerKeypoint;
-      final x = output[baseIndex].clamp(0.0, 1.0) * frameWidth;
-      final y = output[baseIndex + 1].clamp(0.0, 1.0) * frameHeight;
-      final confidence = output[baseIndex + 2].clamp(0.0, 1.0);
+      if (detectionList.isEmpty) continue;
 
-      if (confidence < confidenceThreshold) {
-        continue;
+      // For YOLO: [x_center, y_center, width, height, confidence, ...]
+      final xCenter = (detectionList[0] as num).toDouble();
+      final yCenter = (detectionList[1] as num).toDouble();
+      final width = (detectionList[2] as num).toDouble();
+      final height = (detectionList[3] as num).toDouble();
+      final confidence = (detectionList[4] as num).toDouble();
+
+      if (confidence > maxConfidence) {
+        maxConfidence = confidence;
       }
 
-      keypoints.add(
-        Keypoint(
-          id: i,
-          name: Keypoint.keypointNames[i],
-          x: x,
-          y: y,
-          confidence: confidence,
-        ),
-      );
+      if (confidence > 0.3) { // Confidence threshold
+        // Convert bounding box to corners
+        // Top-left, top-right, bottom-right, bottom-left
+        final x1 = xCenter - width / 2;
+        final y1 = yCenter - height / 2;
+        final x2 = xCenter + width / 2;
+        final y2 = yCenter + height / 2;
+
+        cardCorners.addAll([
+          CardPoint(x1, y1), // Top-left
+          CardPoint(x2, y1), // Top-right
+          CardPoint(x2, y2), // Bottom-right
+          CardPoint(x1, y2), // Bottom-left
+        ]);
+
+        // If model outputs keypoints (for pose detection)
+        // Extract keypoints (adjust based on your model)
+        if (detectionList.length > 5) {
+          final numKeypoints = 17; // COCO format: 17 keypoints
+          final keypointStartIdx = 5; // After bbox and confidence
+
+          for (int i = 0; i < numKeypoints; i++) {
+            if (keypointStartIdx + i * 3 + 2 < detectionList.length) {
+              final kpX = (detectionList[keypointStartIdx + i * 3] as num).toDouble();
+              final kpY = (detectionList[keypointStartIdx + i * 3 + 1] as num).toDouble();
+              final kpConf = (detectionList[keypointStartIdx + i * 3 + 2] as num).toDouble();
+
+              keypoints.add({
+                'index': i,
+                'x': kpX,
+                'y': kpY,
+                'confidence': kpConf,
+              });
+            }
+          }
+        }
+
+        // For card detection, we only need the first detection
+        break;
+      }
     }
 
-    return keypoints;
-  }
-
-  BoundingBox _calculateBoundingBox(
-    List<Keypoint> keypoints,
-    int frameWidth,
-    int frameHeight,
-  ) {
-    if (keypoints.isEmpty) {
-      return BoundingBox(
-        x: 0,
-        y: 0,
-        width: frameWidth.toDouble(),
-        height: frameHeight.toDouble(),
-      );
-    }
-
-    double minX = double.infinity;
-    double minY = double.infinity;
-    double maxX = double.negativeInfinity;
-    double maxY = double.negativeInfinity;
-
-    for (final keypoint in keypoints) {
-      minX = min(minX, keypoint.x);
-      minY = min(minY, keypoint.y);
-      maxX = max(maxX, keypoint.x);
-      maxY = max(maxY, keypoint.y);
-    }
-
-    return BoundingBox(
-      x: minX,
-      y: minY,
-      width: max(0, maxX - minX),
-      height: max(0, maxY - minY),
+    return PoseDetectionResult(
+      keypoints: keypoints,
+      confidence: maxConfidence,
+      timestamp: DateTime.now(),
+      cardCorners: cardCorners,
     );
   }
 
-  double _averageConfidence(List<Keypoint> keypoints) {
-    if (keypoints.isEmpty) return 0;
-    final total =
-        keypoints.fold<double>(0, (previousValue, element) => previousValue + element.confidence);
-    return total / keypoints.length;
-  }
-
-  Future<BodyMeasurements?> extractMeasurements(
-    PoseDetectionResult result, {
-    required double referenceHeight,
-  }) async {
-    if (result.keypoints.isEmpty || referenceHeight <= 0) {
-      return null;
-    }
-
-    final heightPixels = result.boundingBox.height;
-    if (heightPixels <= 0) {
-      return null;
-    }
-
-    final mmPerPixel = referenceHeight / heightPixels;
-    return BodyMeasurements(
-      height: referenceHeight,
-      shoulderWidth: result.boundingBox.width * mmPerPixel * 0.4,
-      chestCircumference: result.boundingBox.width * mmPerPixel * 0.9,
-      waistCircumference: result.boundingBox.width * mmPerPixel * 0.8,
-      hipCircumference: result.boundingBox.width * mmPerPixel,
-      armLength: result.boundingBox.height * mmPerPixel * 0.45,
-      legLength: result.boundingBox.height * mmPerPixel * 0.55,
-    );
-  }
-
+  /// Dispose resources
   void dispose() {
     _interpreter?.close();
     _interpreter = null;
     _isInitialized = false;
+    debugPrint('TFLiteService: Disposed');
   }
 }
 
-/// Result of pose detection inference.
-class PoseDetectionResult {
-  final List<Keypoint> keypoints;
-  final BoundingBox boundingBox;
-  final double confidence;
-
-  const PoseDetectionResult({
-    required this.keypoints,
-    required this.boundingBox,
-    required this.confidence,
-  });
-}
-
-/// A single keypoint in pose detection.
-class Keypoint {
-  final int id;
-  final String name;
-  final double x;
-  final double y;
-  final double confidence;
-
-  const Keypoint({
-    required this.id,
-    required this.name,
-    required this.x,
-    required this.y,
-    required this.confidence,
-  });
-
-  /// YOLOv8 pose keypoint names.
-  static const List<String> keypointNames = [
-    'nose',
-    'left_eye',
-    'right_eye',
-    'left_ear',
-    'right_ear',
-    'left_shoulder',
-    'right_shoulder',
-    'left_elbow',
-    'right_elbow',
-    'left_wrist',
-    'right_wrist',
-    'left_hip',
-    'right_hip',
-    'left_knee',
-    'right_knee',
-    'left_ankle',
-    'right_ankle',
-  ];
-}
-
-/// Bounding box for detected person.
-class BoundingBox {
-  final double x;
-  final double y;
-  final double width;
-  final double height;
-
-  const BoundingBox({
-    required this.x,
-    required this.y,
-    required this.width,
-    required this.height,
-  });
-}
-
-/// Body measurements extracted from pose detection.
-class BodyMeasurements {
-  final double height;
-  final double shoulderWidth;
-  final double chestCircumference;
-  final double waistCircumference;
-  final double hipCircumference;
-  final double armLength;
-  final double legLength;
-
-  const BodyMeasurements({
-    required this.height,
-    required this.shoulderWidth,
-    required this.chestCircumference,
-    required this.waistCircumference,
-    required this.hipCircumference,
-    required this.armLength,
-    required this.legLength,
-  });
-
-  @override
-  String toString() {
-    return 'BodyMeasurements('
-        'height: $height cm, '
-        'shoulderWidth: $shoulderWidth cm, '
-        'chestCircumference: $chestCircumference cm, '
-        'waistCircumference: $waistCircumference cm, '
-        'hipCircumference: $hipCircumference cm, '
-        'armLength: $armLength cm, '
-        'legLength: $legLength cm)';
-  }
-}
-
-class CalibrationResult {
-  final PoseDetectionResult poseResult;
-  final List<Point<double>> cardCorners;
-  final double scaleFactor;
-
-  const CalibrationResult({
-    required this.poseResult,
-    required this.cardCorners,
-    required this.scaleFactor,
-  });
-}
-
-Uint8List _convertYuv420ToRgbaBytes(_SerializableCameraImage payload) {
-  final width = payload.width;
-  final height = payload.height;
-  final yPlane = payload.planes[0];
-  final uPlane = payload.planes[1];
-  final vPlane = payload.planes[2];
-
-  final rgbaBytes = Uint8List(width * height * 4);
-  int index = 0;
-
-  for (int y = 0; y < height; y++) {
-    final uvRow = (y >> 1) * uPlane.bytesPerRow;
-    for (int x = 0; x < width; x++) {
-      final uvColumn = (x >> 1) * uPlane.bytesPerPixel;
-
-      final yValue = yPlane.bytes[y * yPlane.bytesPerRow + x];
-      final uValue = uPlane.bytes[uvRow + uvColumn];
-      final vValue = vPlane.bytes[uvRow + uvColumn];
-
-      final c = yValue - 16;
-      final d = uValue - 128;
-      final e = vValue - 128;
-
-      int r = (1.164 * c + 1.596 * e).round();
-      int g = (1.164 * c - 0.392 * d - 0.813 * e).round();
-      int b = (1.164 * c + 2.017 * d).round();
-
-      r = r.clamp(0, 255);
-      g = g.clamp(0, 255);
-      b = b.clamp(0, 255);
-
-      rgbaBytes[index++] = r;
-      rgbaBytes[index++] = g;
-      rgbaBytes[index++] = b;
-      rgbaBytes[index++] = 255;
-    }
-  }
-
-  return rgbaBytes;
-}
-
-class _SerializableCameraImage {
-  final int width;
-  final int height;
-  final List<_SerializablePlane> planes;
-
-  _SerializableCameraImage({
-    required this.width,
-    required this.height,
-    required this.planes,
-  });
-
-  factory _SerializableCameraImage.fromCameraImage(CameraImage image) {
-    return _SerializableCameraImage(
-      width: image.width,
-      height: image.height,
-      planes: image.planes
-          .map(
-            (plane) => _SerializablePlane(
-              bytes: Uint8List.fromList(plane.bytes),
-              bytesPerRow: plane.bytesPerRow,
-              bytesPerPixel: plane.bytesPerPixel ?? 1,
-            ),
-          )
-          .toList(),
-    );
-  }
-}
-
-class _SerializablePlane {
-  final Uint8List bytes;
-  final int bytesPerRow;
-  final int bytesPerPixel;
-
-  _SerializablePlane({
-    required this.bytes,
-    required this.bytesPerRow,
-    required this.bytesPerPixel,
-  });
-}

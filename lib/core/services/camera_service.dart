@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 /// Service for managing camera operations.
 ///
@@ -71,12 +72,17 @@ class CameraService {
         'Camera service not initialized',
       );
     }
-    await _controller!.startImageStream(onImage);
+
+    if (!_controller!.value.isStreamingImages) {
+      await _controller!.startImageStream(onImage);
+    }
   }
 
   /// Stops the image stream.
   Future<void> stopImageStream() async {
-    if (_controller != null && _isInitialized) {
+    if (_controller != null &&
+        _isInitialized &&
+        _controller!.value.isStreamingImages) {
       await _controller!.stopImageStream();
     }
   }

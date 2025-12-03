@@ -12,27 +12,45 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
-  flutter_riverpod: ^2.4.9
-  riverpod_annotation: ^2.3.3
-  camera: ^0.10.5+9
+  # Updated Riverpod to latest version
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+  # Updated camera
+  camera: ^0.10.6
+  # Updated flutter_tts
   flutter_tts: ^3.8.5
-  tflite_flutter: ^0.10.4
+  # tflite_flutter - using 0.10.4 (most stable)
+  tflite_flutter: 0.10.4
   image: ^4.1.3
   vector_math: ^2.1.4
-  permission_handler: ^11.1.0
+  # Updated permission_handler
+  permission_handler: ^11.4.0
   path_provider: ^2.1.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.1
-  build_runner: ^2.4.8
-  riverpod_generator: ^2.3.9
-  mockito: ^5.4.4
-  build_test: ^2.2.2
+  # Updated flutter_lints
+  flutter_lints: ^3.0.2
+  # Updated build_runner
+  build_runner: ^2.5.4
+  # Updated riverpod_generator
+  riverpod_generator: ^2.6.5
+  # Updated mockito
+  mockito: ^5.4.6
+  # Updated build_test
+  build_test: ^2.2.3
 
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/
+    - assets/models/
+    - assets/models/best.tflite
+    - assets/models/labels.txt
+
+dependency_overrides:
+  # Force compatible typed_data version for tflite_flutter
+  typed_data: ^1.3.2
+  ffi: ^2.1.0
+

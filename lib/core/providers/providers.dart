@@ -4,6 +4,7 @@ import '../services/camera_service.dart';
 import '../services/tflite_service.dart';
 import '../services/guidance_manager.dart';
 
+
 /// Provider for the CameraService.
 final cameraServiceProvider = Provider<CameraService>((ref) {
   final service = CameraService();
@@ -11,7 +12,8 @@ final cameraServiceProvider = Provider<CameraService>((ref) {
   return service;
 });
 
-/// Provider for the TFLiteService.
+
+/// Provider for the TFLiteService (pose detection).
 final tfliteServiceProvider = Provider<TFLiteService>((ref) {
   final service = TFLiteService();
   ref.onDispose(() => service.dispose());
@@ -101,6 +103,7 @@ final calibrationStateProvider =
     StateNotifierProvider<CalibrationStateNotifier, CalibrationState>((ref) {
   return CalibrationStateNotifier();
 });
+
 
 /// State for calibration process.
 class CalibrationState {
