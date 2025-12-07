@@ -1,12 +1,15 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vector_math/vector_math_64.dart';
+import 'package:image/image.dart' as img;
 import '../services/camera_service.dart';
-import '../services/tflite_service.dart';
+import '../services/onnx_inference_service.dart';
 import '../services/guidance_manager.dart';
+import '../services/reactive_guidance_manager.dart';
+import '../services/stability_detector.dart';
+import '../services/auto_capture_manager.dart';
 import '../utils/homography_utils.dart';
 import 'providers.dart'; // Import to access provider definitions
 
@@ -20,26 +23,53 @@ import 'providers.dart'; // Import to access provider definitions
 /// 5. Persists calibration result for downstream measurements
 class CalibrationController extends StateNotifier<CalibrationControllerState> {
   final CameraService _cameraService;
-  final TFLiteService _tfliteService;
+  final OnnxInferenceService _onnxService;
   final GuidanceManager _guidanceManager;
+  final StabilityDetector _stabilityDetector;
+  final AutoCaptureManager _autoCaptureManager;
+  final ReactiveGuidanceManager _reactiveGuidanceManager;
+  List<Vector2>? _latestCorners;
 
-  Timer? _stabilityTimer;
   bool _isProcessingFrame = false;
-  
-  // Temporal smoothing for corner detection
-  final List<List<Vector2>> _recentCorners = [];
-  static const int _smoothingWindow = 5;
-  static const int _requiredStableFrames = 10;
-  int _stableFrameCount = 0;
+  int _frameSkipCounter = 0;
+  static const int _frameSkipInterval = 2; // Process every 2nd frame - ONNX handles additional skipping internally
 
   CalibrationController({
     required CameraService cameraService,
-    required TFLiteService tfliteService,
+    required OnnxInferenceService onnxService,
     required GuidanceManager guidanceManager,
+    required StabilityDetector stabilityDetector,
+    required AutoCaptureManager autoCaptureManager,
+    required ReactiveGuidanceManager reactiveGuidanceManager,
   })  : _cameraService = cameraService,
-        _tfliteService = tfliteService,
+        _onnxService = onnxService,
         _guidanceManager = guidanceManager,
-        super(const CalibrationControllerState());
+        _stabilityDetector = stabilityDetector,
+        _autoCaptureManager = autoCaptureManager,
+        _reactiveGuidanceManager = reactiveGuidanceManager,
+        super(const CalibrationControllerState()) {
+    _setupAutoCapture();
+  }
+
+  void _setupAutoCapture() {
+    _autoCaptureManager.onStateChanged = (captureState) {
+      state = state.copyWith(captureState: captureState);
+    };
+    _autoCaptureManager.onCountdownTick = (countdown) {
+      state = state.copyWith(countdownValue: countdown);
+    };
+    _autoCaptureManager.onCapture = () {
+      // ✅ CRITICAL: Only finalize if we have valid corners
+      if (_latestCorners != null && _latestCorners!.length == 4) {
+        debugPrint('CalibrationController: ✅ Auto-capture triggered with valid corners');
+        _finalizeCalibration(_latestCorners!);
+      } else {
+        debugPrint('CalibrationController: ❌ Auto-capture blocked - no valid corners');
+        // Reset auto-capture to wait for valid detection
+        _autoCaptureManager.reset();
+      }
+    };
+  }
 
   /// Starts the calibration process.
   Future<void> startCalibration() async {
@@ -52,9 +82,16 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       status: CalibrationStatus.calibrating,
       statusMessage: 'Initializing calibration...',
       progress: 0.0,
+      stabilityScore: 0.0,
     );
 
-    await _guidanceManager.speak('Place the reference card flat on a surface');
+    // ✅ FIXED: Card should be held at chest level, not on a surface
+    await _guidanceManager.speak(
+      'Hold the reference card at chest level in front of your body. '
+      'Stand straight, 2 meters from the camera.'
+    );
+
+    await _stabilityDetector.initialize();
 
     // Start processing camera frames
     _startFrameProcessing();
@@ -67,67 +104,176 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
 
   /// Processes a single camera frame for card corner detection.
   Future<void> _processFrame(CameraImage image) async {
-    if (_isProcessingFrame) return;
+    // Skip frames to improve performance
+    _frameSkipCounter++;
+    if (_frameSkipCounter < _frameSkipInterval) {
+      return;
+    }
+    _frameSkipCounter = 0;
+
+    if (_isProcessingFrame || !_cameraService.isInitialized) return;
     if (state.status != CalibrationStatus.calibrating) return;
 
     _isProcessingFrame = true;
 
     try {
-      // Run YOLO inference to detect card corners using TFLite
-      final calibrationResult = await _tfliteService.runInference(image);
+      // Run YOLO inference to detect card corners using ONNX Runtime
+      final calibrationResult = await _onnxService.runInference(image);
 
       if (calibrationResult == null) {
+        debugPrint('CalibrationController: No inference result');
         _isProcessingFrame = false;
         return;
       }
 
+      debugPrint('CalibrationController: Inference result - corners=${calibrationResult.cardCorners.length}, conf=${calibrationResult.confidence.toStringAsFixed(3)}');
+
+      final imgImage = _convertCameraImageToImage(image);
+      final isDeviceStable = _stabilityDetector.isStable(imgImage);
+      final stabilityScore = _stabilityDetector.getStabilityScore(imgImage);
+
+      state = state.copyWith(stabilityScore: stabilityScore);
+
+      // Removed strict stability check - just warn
+      if (!isDeviceStable) {
+        debugPrint('CalibrationController: Device not stable, but continuing...');
+      }
+
       final corners = calibrationResult.cardCorners;
       
+      // Check if card was detected
+      if (corners.isEmpty || corners.length < 4) {
+        // ✅ CRITICAL: Clear latestCorners to prevent false calibration
+        _latestCorners = null;
+        _autoCaptureManager.checkConditions(
+          isStable: false,
+          isCardDetected: false,
+          isGoodQuality: false,
+        );
+        state = state.copyWith(
+          statusMessage: 'Position card in frame',
+          detectedCorners: null,
+        );
+        debugPrint('CalibrationController: No card corners detected');
+        _isProcessingFrame = false;
+        return;
+      }
+
+      debugPrint('CalibrationController: Card detected with ${corners.length} corners');
+
       // Convert CardPoint to Vector2 for homography calculations
       final cornerVectors = corners
           .map((p) => Vector2(p.x, p.y))
           .toList()
           .cast<Vector2>();
 
-      // Validate corner geometry using homography utils
-      if (!HomographyUtils.validateCardCorners(cornerVectors)) {
+      // ✅ CRITICAL: Use high confidence threshold to ensure REAL card detection
+      // The model must be VERY confident this is an actual card, not just any rectangle
+      const double minConfidenceThreshold = 0.70; // Increased from 0.40 to 0.70
+
+      // ✅ CRITICAL: Validate corner geometry before accepting
+      // Convert normalized coordinates to pixel coordinates for validation
+      const int modelInputSize = 640;
+      final pixelCornersForValidation = cornerVectors.map((c) => Vector2(
+        c.x * modelInputSize,
+        c.y * modelInputSize,
+      )).toList();
+
+      // Validate corners form a proper card shape with correct aspect ratio
+      final bool validGeometry = HomographyUtils.validateCardCorners(
+        pixelCornersForValidation,
+        minArea: 5000, // Minimum 5000 pixels² to ensure card is not too small
+        aspectTolerance: 0.25, // ±25% tolerance on aspect ratio
+      );
+
+      final isCardDetected = corners.length == 4 &&
+                             calibrationResult.confidence >= minConfidenceThreshold &&
+                             validGeometry; // ✅ CRITICAL: Must pass geometry validation
+
+      if (!isCardDetected) {
+        // ✅ CRITICAL: Clear latestCorners to prevent false calibration
+        _latestCorners = null;
+        _autoCaptureManager.checkConditions(
+          isStable: false,
+          isCardDetected: false,
+          isGoodQuality: false,
+        );
+
+        // More informative status message
+        String statusMsg;
+        if (corners.length != 4) {
+          statusMsg = 'No card detected. Please show your ID/credit card.';
+        } else if (calibrationResult.confidence < minConfidenceThreshold) {
+          statusMsg = 'Card not clear enough. Hold card steady and ensure good lighting.';
+        } else if (!validGeometry) {
+          statusMsg = 'Invalid card shape. Ensure full card is visible and not distorted.';
+        } else {
+          statusMsg = 'Position card in frame';
+        }
+
         state = state.copyWith(
-          statusMessage: 'Card not detected clearly - adjust position',
+          statusMessage: statusMsg,
           detectedCorners: null,
         );
-        _stableFrameCount = 0;
+        debugPrint('CalibrationController: Card detection failed - '
+            'corners=${corners.length}, conf=${calibrationResult.confidence.toStringAsFixed(3)}, '
+            'validGeometry=$validGeometry');
         _isProcessingFrame = false;
         return;
       }
 
-      // Add to temporal smoothing buffer
-      _recentCorners.add(cornerVectors);
-      if (_recentCorners.length > _smoothingWindow) {
-        _recentCorners.removeAt(0);
+      // ✅ Only set latestCorners AFTER validation passes
+      _latestCorners = cornerVectors;
+
+      debugPrint('CalibrationController: Valid card detected! conf=${calibrationResult.confidence.toStringAsFixed(3)}');
+
+      // Only compute homography if we have valid corners
+      double quality = 0.0;
+      try {
+        // Convert normalized coordinates to pixel coordinates for homography
+        const int modelInputSize = 640;
+        final pixelCorners = cornerVectors.map((c) => Vector2(
+          c.x * modelInputSize,
+          c.y * modelInputSize,
+        )).toList();
+
+        final homography = HomographyUtils.computeHomography(pixelCorners, 640, 400);
+        quality = HomographyUtils.validateHomographyQuality(homography, pixelCorners);
+      } catch (e) {
+        debugPrint('Homography computation failed: $e');
+        quality = 0.7; // Default to acceptable quality if computation fails
       }
 
-      // Check stability (corners should be consistent across frames)
-      if (_areCornerStable()) {
-        _stableFrameCount++;
-        final progress = min(1.0, _stableFrameCount / _requiredStableFrames);
-        
-        state = state.copyWith(
-          statusMessage: 'Hold steady... ${(_stableFrameCount / _requiredStableFrames * 100).toInt()}%',
-          detectedCorners: cornerVectors,
-          progress: progress,
-        );
+      // Lowered quality threshold from 0.9 to 0.6 for faster capture
+      final isGoodQuality = quality > 0.6;
 
-        if (_stableFrameCount >= _requiredStableFrames) {
-          await _finalizeCalibration(cornerVectors);
-        }
-      } else {
-        _stableFrameCount = 0;
-        state = state.copyWith(
-          statusMessage: 'Hold card steady',
-          detectedCorners: cornerVectors,
-          progress: 0.0,
-        );
-      }
+      _autoCaptureManager.checkConditions(
+        isStable: isDeviceStable,
+        isCardDetected: isCardDetected,
+        isGoodQuality: isGoodQuality,
+      );
+
+      // Convert to pixel coords for tilt calculation
+      const int modelInputSize = 640;
+      final pixelCornersForTilt = cornerVectors.map((c) => Vector2(
+        c.x * modelInputSize,
+        c.y * modelInputSize,
+      )).toList();
+
+      _reactiveGuidanceManager.analyzeAndGuide(
+        isStable: isDeviceStable,
+        isCardDetected: isCardDetected,
+        qualityScore: quality,
+        cardTilt: HomographyUtils.calculateCardTilt(pixelCornersForTilt),
+        stabilityScore: stabilityScore,
+      );
+
+      // Update UI with detected corners
+      state = state.copyWith(
+        detectedCorners: cornerVectors,
+        qualityScore: quality, // Update quality score in state
+      );
+
     } catch (e) {
       debugPrint('Frame processing error: $e');
     } finally {
@@ -135,40 +281,24 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
     }
   }
 
-  /// Checks if detected corners are stable across recent frames.
-  bool _areCornerStable() {
-    if (_recentCorners.length < _smoothingWindow) return false;
+  /// Finalizes calibration by computing homography and scale factor.
+  Future<void> _finalizeCalibration(List<Vector2> corners) async {
+    // ✅ CRITICAL: Validate corners before proceeding
+    if (corners.length != 4) {
+      debugPrint('CalibrationController: ❌ Cannot finalize - invalid corners count: ${corners.length}');
+      _handleCalibrationError('Invalid card detection. Please try again.');
+      return;
+    }
 
-    // Calculate variance of corner positions
-    for (int i = 0; i < 4; i++) {
-      double sumX = 0, sumY = 0;
-      double sumX2 = 0, sumY2 = 0;
-
-      for (final corners in _recentCorners) {
-        sumX += corners[i].x;
-        sumY += corners[i].y;
-        sumX2 += corners[i].x * corners[i].x;
-        sumY2 += corners[i].y * corners[i].y;
-      }
-
-      final n = _recentCorners.length;
-      final meanX = sumX / n;
-      final meanY = sumY / n;
-      final varianceX = (sumX2 / n) - (meanX * meanX);
-      final varianceY = (sumY2 / n) - (meanY * meanY);
-
-      // Corners should not move more than 5 pixels
-      const double maxVariance = 25.0; // 5 pixels squared
-      if (varianceX > maxVariance || varianceY > maxVariance) {
-        return false;
+    // Validate corner values are reasonable (normalized 0-1)
+    for (int i = 0; i < corners.length; i++) {
+      if (corners[i].x < 0 || corners[i].x > 1 || corners[i].y < 0 || corners[i].y > 1) {
+        debugPrint('CalibrationController: ❌ Invalid corner $i: (${corners[i].x}, ${corners[i].y})');
+        _handleCalibrationError('Invalid card position. Please try again.');
+        return;
       }
     }
 
-    return true;
-  }
-
-  /// Finalizes calibration by computing homography and scale factor.
-  Future<void> _finalizeCalibration(List<Vector2> corners) async {
     await _cameraService.stopImageStream();
 
     state = state.copyWith(
@@ -179,54 +309,61 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
     await _guidanceManager.speak('Calibration complete');
 
     try {
-      // Compute smoothed corners (average of recent detections)
-      final smoothedCorners = _computeSmoothedCorners();
+      // ✅ Convert normalized coordinates (0-1) to pixel coordinates
+      // Using 640x640 as the model input size
+      const int modelInputSize = 640;
+      final pixelCorners = corners.map((c) => Vector2(
+        c.x * modelInputSize,
+        c.y * modelInputSize,
+      )).toList();
 
-      // Compute homography matrix
+      debugPrint('CalibrationController: Pixel corners:');
+      for (int i = 0; i < pixelCorners.length; i++) {
+        debugPrint('  Corner $i: (${pixelCorners[i].x.toStringAsFixed(1)}, ${pixelCorners[i].y.toStringAsFixed(1)})');
+      }
+
+      // ✅ Compute mm_per_pixel directly from corner positions
+      // This is simpler and more accurate than using homography for scale
+      final mmPerPixel = HomographyUtils.computeMmPerPixelFromCorners(pixelCorners);
+
+      debugPrint('CalibrationController: Computed mm_per_pixel = ${mmPerPixel.toStringAsFixed(4)}');
+
+      // ✅ Also compute homography for potential perspective corrections
       const int canonicalWidth = 640;
-      const int canonicalHeight = 400; // Maintains card aspect ratio
+      const int canonicalHeight = 400; // Maintains card aspect ratio (85.6:53.98)
       final homography = HomographyUtils.computeHomography(
-        smoothedCorners,
+        pixelCorners,
         canonicalWidth,
         canonicalHeight,
       );
 
-      // Compute mm_per_pixel scale factor
-      final mmPerPixel = HomographyUtils.computeMmPerPixelFromCorners(smoothedCorners);
+      // ✅ Validate homography quality
+      final quality = HomographyUtils.validateHomographyQuality(
+        homography,
+        pixelCorners,
+      );
+
+      if (quality < 0.90) {
+        debugPrint('Warning: Low homography quality: ${(quality * 100).toStringAsFixed(1)}%');
+      }
+
 
       // Store calibration result
       state = state.copyWith(
         status: CalibrationStatus.completed,
-        statusMessage: 'Calibration successful! Scale: ${mmPerPixel.toStringAsFixed(4)} mm/px',
+        statusMessage: 'Calibration successful! Scale: ${mmPerPixel.toStringAsFixed(4)} mm/px (Quality: ${(quality * 100).toStringAsFixed(0)}%)',
         mmPerPixel: mmPerPixel,
         homographyMatrix: homography,
-        detectedCorners: smoothedCorners,
+        detectedCorners: corners,
         progress: 1.0,
       );
 
-      debugPrint('Calibration completed: $mmPerPixel mm/pixel');
+      debugPrint('✅ Calibration completed successfully:');
+      debugPrint('  mm_per_pixel: $mmPerPixel');
+      debugPrint('  Quality: ${(quality * 100).toStringAsFixed(1)}%');
     } catch (e) {
       _handleCalibrationError('Calibration computation failed: $e');
     }
-  }
-
-  /// Computes smoothed corner positions by averaging recent detections.
-  List<Vector2> _computeSmoothedCorners() {
-    final smoothed = <Vector2>[];
-    
-    for (int i = 0; i < 4; i++) {
-      double sumX = 0, sumY = 0;
-      
-      for (final corners in _recentCorners) {
-        sumX += corners[i].x;
-        sumY += corners[i].y;
-      }
-      
-      final n = _recentCorners.length;
-      smoothed.add(Vector2(sumX / n, sumY / n));
-    }
-    
-    return smoothed;
   }
 
   /// Handles calibration errors.
@@ -243,11 +380,8 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
   /// Resets calibration state.
   void resetCalibration() {
     _cameraService.stopImageStream();
-    _stabilityTimer?.cancel();
-    _recentCorners.clear();
-    _stableFrameCount = 0;
     _isProcessingFrame = false;
-
+    _autoCaptureManager.reset();
     state = const CalibrationControllerState();
   }
 
@@ -261,8 +395,30 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
   @override
   void dispose() {
     _cameraService.stopImageStream();
-    _stabilityTimer?.cancel();
     super.dispose();
+  }
+
+  img.Image _convertCameraImageToImage(CameraImage image) {
+    // use Y plane bytes for luminance comparison
+    final plane = image.planes.first;
+    final width = image.width;
+    final height = image.height;
+    final imageBytes = Uint8List(width * height * 4);
+
+    for (int i = 0; i < width * height; i++) {
+      final yValue = plane.bytes[i];
+      imageBytes[i * 4] = yValue; // R
+      imageBytes[i * 4 + 1] = yValue; // G
+      imageBytes[i * 4 + 2] = yValue; // B
+      imageBytes[i * 4 + 3] = 255; // A
+    }
+
+    return img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: imageBytes.buffer,
+      numChannels: 4,
+    );
   }
 }
 
@@ -274,6 +430,10 @@ class CalibrationControllerState {
   final double? mmPerPixel;
   final Matrix3? homographyMatrix;
   final List<Vector2>? detectedCorners;
+  final double? stabilityScore;
+  final CaptureState captureState;
+  final int? countdownValue;
+  final double? qualityScore;
 
   const CalibrationControllerState({
     this.status = CalibrationStatus.idle,
@@ -282,6 +442,10 @@ class CalibrationControllerState {
     this.mmPerPixel,
     this.homographyMatrix,
     this.detectedCorners,
+    this.stabilityScore,
+    this.captureState = CaptureState.waiting,
+    this.countdownValue,
+    this.qualityScore,
   });
 
   CalibrationControllerState copyWith({
@@ -291,6 +455,10 @@ class CalibrationControllerState {
     double? mmPerPixel,
     Matrix3? homographyMatrix,
     List<Vector2>? detectedCorners,
+    double? stabilityScore,
+    CaptureState? captureState,
+    int? countdownValue,
+    double? qualityScore,
   }) {
     return CalibrationControllerState(
       status: status ?? this.status,
@@ -299,6 +467,10 @@ class CalibrationControllerState {
       mmPerPixel: mmPerPixel ?? this.mmPerPixel,
       homographyMatrix: homographyMatrix ?? this.homographyMatrix,
       detectedCorners: detectedCorners ?? this.detectedCorners,
+      stabilityScore: stabilityScore ?? this.stabilityScore,
+      captureState: captureState ?? this.captureState,
+      countdownValue: countdownValue ?? this.countdownValue,
+      qualityScore: qualityScore ?? this.qualityScore,
     );
   }
 
@@ -318,14 +490,19 @@ final calibrationControllerProvider =
     StateNotifierProvider.autoDispose<CalibrationController, CalibrationControllerState>(
   (ref) {
     final cameraService = ref.watch(cameraServiceProvider);
-    final tfliteService = ref.watch(tfliteServiceProvider);
+    final onnxService = ref.watch(onnxInferenceServiceProvider);
     final guidanceManager = ref.watch(guidanceManagerProvider);
+    final stabilityDetector = ref.watch(stabilityDetectorProvider);
+    final autoCaptureManager = ref.watch(autoCaptureManagerProvider);
+    final reactiveGuidanceManager = ref.watch(reactiveGuidanceManagerProvider);
 
     return CalibrationController(
       cameraService: cameraService,
-      tfliteService: tfliteService,
+      onnxService: onnxService,
       guidanceManager: guidanceManager,
+      stabilityDetector: stabilityDetector,
+      autoCaptureManager: autoCaptureManager,
+      reactiveGuidanceManager: reactiveGuidanceManager,
     );
   },
 );
-

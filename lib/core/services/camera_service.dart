@@ -1,5 +1,4 @@
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// Service for managing camera operations.
@@ -28,9 +27,9 @@ class CameraService {
   /// Initializes the camera service with the specified resolution.
   ///
   /// [resolutionPreset] determines the quality of the camera preview.
-  /// Defaults to [ResolutionPreset.high].
+  /// Defaults to [ResolutionPreset.medium] for better real-time performance.
   Future<void> initialize({
-    ResolutionPreset resolutionPreset = ResolutionPreset.high,
+    ResolutionPreset resolutionPreset = ResolutionPreset.medium,
   }) async {
     try {
       _cameras = await availableCameras();

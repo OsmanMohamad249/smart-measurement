@@ -1,15 +1,16 @@
-# 🎯 TFLite Model - Smart Measurement
+# 🎯 ONNX Models - Smart Measurement
 
-## ✅ النموذج المدمج
+## ✅ النماذج المدمجة
 
-### best.tflite
-- **النوع:** YOLO-Pose Card Corner Detection
-- **الإصدار:** v1_card_corner (Float16)
-- **الحجم:** 6.11 MB
-- **الدقة:** Float16 (16-bit)
-- **المصدر:** QayafaCardModel
-- **تاريخ التدريب:** 02/12/2025
-- **تاريخ الدمج:** 03/12/2025
+### card_detector.onnx
+- **النوع:** YOLO Card Corner Detection
+- **الصيغة:** ONNX Runtime
+- **الوظيفة:** كشف البطاقة المرجعية وزواياها الأربع
+
+### best.onnx
+- **النوع:** YOLO-Pose Detection
+- **الصيغة:** ONNX Runtime
+- **الوظيفة:** كشف نقاط الجسم
 
 ### labels.txt
 - **الفئات:** card
@@ -22,14 +23,11 @@
 | المعلومة | القيمة |
 |---------|--------|
 | حجم الإدخال | 640×640×3 (RGB) |
-| نوع البيانات | Float16 |
-| المخرجات | Card corners (4 points) + bbox |
-| الأداء | ~50-100ms (متوسط) |
-| الذاكرة | منخفضة |
+| نوع البيانات | Float32 |
+| Runtime | ONNX Runtime |
 
 ---
 
 ## 🚀 جاهز للاستخدام
 
-النموذج مُحسّن ومدمج في التطبيق!
-
+النماذج مُحسّنة ومدمجة في التطبيق باستخدام ONNX Runtime!

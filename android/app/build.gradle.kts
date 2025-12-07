@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.smartmeasurement.app"
-        minSdk = 26  // Required for tflite_flutter, Camera2 API and ONNX Runtime
+        minSdk = 26  // Required for Camera2 API and ONNX Runtime
         targetSdk = flutter.targetSdkVersion
         versionCode = 1
         versionName = "1.0.0"
@@ -32,6 +32,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+
+            // Disable minification to avoid ProGuard issues with ONNX
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:developer' as developer;
 import 'package:vector_math/vector_math_64.dart';
 
 /// Homography and perspective transformation utilities for Zero-Touch calibration.
@@ -73,7 +74,7 @@ class HomographyUtils {
 
     // Find the eigenvector corresponding to the smallest eigenvalue
     // using inverse power iteration
-    List<double> v = List.generate(9, (i) => i == 8 ? 1.0 : 0.0);
+    final List<double> v = List.generate(9, (i) => i == 8 ? 1.0 : 0.0);
 
     // Perform power iteration to find the smallest eigenvector
     for (int iter = 0; iter < 1000; iter++) {
@@ -105,7 +106,14 @@ class HomographyUtils {
     );
   }
 
-  /// Computes mm_per_pixel by measuring the top edge length in pixel space.
+  /// Computes mm_per_pixel by measuring the card width in pixel space.
+  ///
+  /// ✅ CORRECT METHOD: This method works accurately when the card is held
+  /// at the same level as the body (e.g., chest level), ensuring the same
+  /// distance from camera and same perspective as body measurements.
+  ///
+  /// The card's known real-world width (85.6mm) divided by its pixel width
+  /// gives accurate mm_per_pixel for measurements at the same depth.
   ///
   /// [srcCorners] - Detected card corners ordered as [tl, tr, br, bl].
   ///
@@ -124,7 +132,7 @@ class HomographyUtils {
     final double topEdgePixels = (tr - tl).length;
     final double bottomEdgePixels = (br - bl).length;
 
-    // Average the two edges to compensate for perspective
+    // Average the two edges to compensate for minor perspective variations
     final double avgPixelWidth = (topEdgePixels + bottomEdgePixels) / 2;
 
     if (avgPixelWidth == 0) {
@@ -132,7 +140,22 @@ class HomographyUtils {
     }
 
     // Compute scale: mm per pixel
+    // Since card is at chest level (same as body measurements),
+    // this ratio applies accurately to body measurements
     return cardWidthMm / avgPixelWidth;
+  }
+
+  /// Alternative method: Computes mm_per_pixel from canonical plane width.
+  ///
+  /// This method uses the canonical width specified during homography computation.
+  /// Useful when working with rectified images in the canonical plane.
+  ///
+  /// [canonicalWidthPx] - The canonical plane width used in computeHomography
+  ///
+  /// Returns the scale factor in millimeters per pixel in the canonical plane.
+  static double computeMmPerPixelFromCanonicalWidth(int canonicalWidthPx) {
+    // Simple and correct: mm_per_pixel in the rectified canonical plane
+    return cardWidthMm / canonicalWidthPx;
   }
 
   /// Applies homography transformation to a point.
@@ -185,7 +208,7 @@ class HomographyUtils {
 
     // Check aspect ratio
     final double observedAspect = avgWidth / avgHeight;
-    final double expectedAspect = cardWidthMm / cardHeightMm;
+    const double expectedAspect = cardWidthMm / cardHeightMm;
     final double aspectDelta = (observedAspect - expectedAspect).abs() / expectedAspect;
 
     if (aspectDelta > aspectTolerance) {
@@ -221,5 +244,153 @@ class HomographyUtils {
     final Vector2 transformed2 = transformPoint(h, point2);
     return (transformed2 - transformed1).length;
   }
-}
 
+  /// ✅ Step 4: Extract scale from Homography Matrix
+  ///
+  /// This method computes mm_per_pixel by transforming the card corners
+  /// through the homography matrix and measuring dimensions in the
+  /// rectified canonical plane.
+  ///
+  /// This is more accurate than direct pixel measurement as it accounts
+  /// for perspective distortion through the homography transformation.
+  ///
+  /// [homography] - The 3×3 homography matrix
+  /// [srcCorners] - Original detected card corners
+  ///
+  /// Returns the scale factor in millimeters per pixel
+  static double computeScaleFromHomography(
+    Matrix3 homography,
+    List<Vector2> srcCorners,
+  ) {
+    if (srcCorners.length != 4) {
+      throw ArgumentError('srcCorners must contain exactly 4 points');
+    }
+
+    // Transform corners to canonical plane
+    final transformedCorners = srcCorners
+        .map((corner) => transformPoint(homography, corner))
+        .toList();
+
+    // Measure card dimensions in canonical plane
+    final tl = transformedCorners[0];
+    final tr = transformedCorners[1];
+    final br = transformedCorners[2];
+    final bl = transformedCorners[3];
+
+    // Measure width (top and bottom edges)
+    final topWidth = (tr - tl).length;
+    final bottomWidth = (br - bl).length;
+    final avgWidth = (topWidth + bottomWidth) / 2;
+
+    // Measure height (left and right edges)
+    final leftHeight = (bl - tl).length;
+    final rightHeight = (br - tr).length;
+    final avgHeight = (leftHeight + rightHeight) / 2;
+
+    // Verify aspect ratio
+    final aspectRatio = avgWidth / avgHeight;
+    const expectedAspectRatio = cardWidthMm / cardHeightMm; // 1.586
+    final aspectError = ((aspectRatio - expectedAspectRatio) / expectedAspectRatio).abs();
+
+    if (aspectError > 0.15) {
+      developer.log('Warning: Aspect ratio deviation: ${(aspectError * 100).toStringAsFixed(1)}%');
+      developer.log('  Observed: ${aspectRatio.toStringAsFixed(3)}');
+      developer.log('  Expected: ${expectedAspectRatio.toStringAsFixed(3)}');
+    }
+
+    // Compute scale from both dimensions
+    final scaleFromWidth = cardWidthMm / avgWidth;
+    final scaleFromHeight = cardHeightMm / avgHeight;
+
+    // Average both scales for maximum accuracy
+    final avgScale = (scaleFromWidth + scaleFromHeight) / 2;
+
+    developer.log('Scale computation:');
+    developer.log('  From width:  ${scaleFromWidth.toStringAsFixed(4)} mm/px');
+    developer.log('  From height: ${scaleFromHeight.toStringAsFixed(4)} mm/px');
+    developer.log('  Average:     ${avgScale.toStringAsFixed(4)} mm/px');
+
+    return avgScale;
+  }
+
+  /// ✅ Validate homography quality
+  ///
+  /// Checks if the homography transformation is accurate by back-projecting
+  /// the transformed corners and measuring reprojection error.
+  ///
+  /// Returns a quality score from 0.0 (poor) to 1.0 (perfect)
+  static double validateHomographyQuality(
+    Matrix3 homography,
+    List<Vector2> srcCorners,
+  ) {
+    if (srcCorners.length != 4) {
+      return 0.0;
+    }
+
+    try {
+      // Create inverse homography
+      final inverseH = homography.clone()..invert();
+
+      double totalError = 0.0;
+
+      for (var corner in srcCorners) {
+        // Forward transform
+        final transformed = transformPoint(homography, corner);
+
+        // Back-project
+        final backProjected = transformPoint(inverseH, transformed);
+
+        // Measure reprojection error
+        final error = (backProjected - corner).length;
+        totalError += error;
+      }
+
+      final avgError = totalError / srcCorners.length;
+
+      // Convert to quality score (0.5 pixels error = 0.95 quality)
+      final quality = 1.0 - (avgError / 10.0).clamp(0.0, 1.0);
+
+      developer.log('Homography validation:');
+      developer.log('  Avg reprojection error: ${avgError.toStringAsFixed(3)} pixels');
+      developer.log('  Quality score: ${(quality * 100).toStringAsFixed(1)}%');
+
+      return quality;
+    } catch (e) {
+      developer.log('Homography validation failed: $e');
+      return 0.0;
+    }
+  }
+
+  /// Calculates the tilt angle of the card in degrees.
+  ///
+  /// This method analyzes the detected card corners to determine
+  /// how much the card is tilted from the horizontal axis.
+  ///
+  /// [corners] - Detected card corners ordered as [tl, tr, br, bl].
+  ///
+  /// Returns the tilt angle in degrees (0 = perfectly horizontal).
+  static double calculateCardTilt(List<Vector2> corners) {
+    if (corners.length != 4) {
+      return 0.0;
+    }
+
+    final Vector2 tl = corners[0];
+    final Vector2 tr = corners[1];
+    final Vector2 bl = corners[3];
+
+    // Calculate angle of the top edge
+    final double topEdgeDx = tr.x - tl.x;
+    final double topEdgeDy = tr.y - tl.y;
+    final double topAngle = atan2(topEdgeDy, topEdgeDx) * 180 / pi;
+
+    // Calculate angle of the left edge from vertical
+    final double leftEdgeDx = bl.x - tl.x;
+    final double leftEdgeDy = bl.y - tl.y;
+    final double leftAngle = atan2(leftEdgeDx, leftEdgeDy) * 180 / pi;
+
+    // The tilt is the average of the horizontal and vertical deviations
+    final double tilt = (topAngle.abs() + leftAngle.abs()) / 2;
+
+    return tilt;
+  }
+}

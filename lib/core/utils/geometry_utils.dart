@@ -56,7 +56,7 @@ class GeometryUtils {
     final avgWidth = (topEdge + bottomEdge) / 2;
     final avgHeight = (leftEdge + rightEdge) / 2;
     final observedAspect = avgWidth / avgHeight;
-    final expectedAspect = _cardWidthMm / _cardHeightMm;
+    const expectedAspect = _cardWidthMm / _cardHeightMm;
 
     final aspectDelta = (observedAspect - expectedAspect).abs() / expectedAspect;
     if (aspectDelta > aspectTolerance) {

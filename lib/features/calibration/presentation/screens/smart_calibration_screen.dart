@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/providers/providers.dart';
 import '../../../../core/providers/calibration_controller.dart';
-import '../../../../core/services/guidance_manager.dart';
+import '../../../../core/services/auto_capture_manager.dart';
 import '../widgets/polygon_overlay.dart';
-import '../widgets/calibration_guide.dart';
+import '../widgets/countdown_overlay.dart';
+import '../widgets/stability_ring.dart';
+import '../widgets/quality_meter.dart';
 
 /// Main screen for smart calibration with camera preview and guidance.
 ///
@@ -45,7 +47,7 @@ class _SmartCalibrationScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Camera permission denied. Please enable it in settings.'),
+            content: const Text('Camera permission denied. Please enable it in settings.'),
             duration: const Duration(seconds: 5),
             action: SnackBarAction(
               label: 'Retry',
@@ -64,11 +66,11 @@ class _SmartCalibrationScreenState
       await ref.read(cameraInitializerProvider.notifier).initialize();
       debugPrint('Camera initialized successfully');
 
-      // Initialize TFLite inference service
-      debugPrint('Initializing TFLite service...');
-      final tfliteService = ref.read(tfliteServiceProvider);
-      await tfliteService.initialize();
-      debugPrint('TFLite service initialized: ${tfliteService.isInitialized}');
+      // Initialize ONNX inference service
+      debugPrint('Initializing ONNX service...');
+      final onnxService = ref.read(onnxInferenceServiceProvider);
+      await onnxService.initialize();
+      debugPrint('ONNX service initialized: ${onnxService.isInitialized}');
 
       // Initialize guidance manager
       debugPrint('Initializing guidance manager...');
@@ -204,11 +206,31 @@ class _SmartCalibrationScreenState
           borderRadius: BorderRadius.circular(12),
           child: CameraPreview(cameraState.controller!),
         ),
+        // Stability ring overlayed on preview
+        IgnorePointer(
+          child: StabilityRing(
+            stabilityScore: calibrationController.stabilityScore ?? 0,
+            diameter: MediaQuery.of(context).size.width * 0.75,
+          ),
+        ),
         // Polygon overlay showing detected card corners
         if (calibrationController.detectedCorners != null)
           PolygonOverlay(corners: calibrationController.detectedCorners),
+        // Countdown overlay
+        CountdownOverlay(
+          countdown: calibrationController.countdownValue ?? 0,
+          isVisible: calibrationController.captureState == CaptureState.countingDown,
+        ),
         // Status indicators
         _buildStatusIndicators(calibrationController),
+        Positioned(
+          bottom: 20,
+          left: 20,
+          child: QualityMeter(
+            qualityScore: calibrationController.qualityScore ?? 0,
+            width: MediaQuery.of(context).size.width * 0.5,
+          ),
+        ),
       ],
     );
   }
@@ -221,7 +243,7 @@ class _SmartCalibrationScreenState
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: _getStatusColor(state.status).withOpacity(0.9),
+          color: _getStatusColor(state.status).withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -271,7 +293,7 @@ class _SmartCalibrationScreenState
         color: Theme.of(context).cardColor,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 8,
             offset: const Offset(0, -2),
           ),
@@ -382,15 +404,26 @@ class _SmartCalibrationScreenState
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               SizedBox(height: 8),
-              Text('1. Place a standard ID card (85.6mm × 53.98mm) on a flat surface'),
+              Text('1. Hold a standard ID card (85.6mm × 53.98mm) at chest level'),
               SizedBox(height: 4),
-              Text('2. Ensure good lighting and avoid shadows'),
+              Text('2. Stand straight, 2 meters from the camera'),
               SizedBox(height: 4),
-              Text('3. Tap "Start Calibration" and hold the camera steady'),
+              Text('3. Keep the card parallel to your body'),
               SizedBox(height: 4),
-              Text('4. The app will detect the card corners automatically'),
+              Text('4. Ensure good lighting and avoid shadows'),
               SizedBox(height: 4),
-              Text('5. Wait for the progress bar to complete'),
+              Text('5. Tap "Start Calibration" and hold steady'),
+              SizedBox(height: 4),
+              Text('6. Wait for the progress bar to complete'),
+              SizedBox(height: 12),
+              Text(
+                'Why chest level?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 8),
+              Text('• Card must be at same distance as your body'),
+              Text('• Ensures accurate measurements (99%+ accuracy)'),
+              Text('• Same perspective as body measurements'),
               SizedBox(height: 12),
               Text(
                 'Tips:',
@@ -406,7 +439,7 @@ class _SmartCalibrationScreenState
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Got it'),
+            child: const Text('Got it'),
           ),
         ],
       ),

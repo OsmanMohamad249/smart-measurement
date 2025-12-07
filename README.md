@@ -1,82 +1,267 @@
-# Smart Measurement
+# Smart Measurement App 📏🎯
 
-A precise AI-powered body measurement app using Flutter & Edge AI.
+تطبيق Flutter متقدم لقياسات الجسم بدقة عالية باستخدام الذكاء الاصطناعي والكاميرا.
 
-## Features
+---
 
-- **Smart Calibration**: Calibrate the system for accurate measurements with visual guidance
-- **Body Capture**: Capture body images from multiple angles
-- **Results Display**: View detailed body measurements
+## ⚠️ مهم جداً: تثبيت Flutter SDK
 
-## Architecture
+**إذا ظهرت لك رسالة "flutter is not recognized":**
 
-This app follows Clean Architecture principles with Riverpod for state management.
+Flutter SDK غير مثبت على جهازك! يجب تثبيته أولاً:
 
-### Project Structure
+### 🚀 الحل السريع:
+```powershell
+.\install-flutter.ps1 -AddToPath
+```
+
+**أو** راجع الدليل الكامل: [FLUTTER_INSTALLATION_REQUIRED.md](FLUTTER_INSTALLATION_REQUIRED.md)
+
+---
+
+---
+
+## ✨ الميزات الرئيسية
+
+### 🎯 معايرة ذكية (Smart Calibration)
+- كشف تلقائي للبطاقة المرجعية باستخدام نموذج YOLOv8
+- التحقق من صحة زوايا البطاقة الأربع
+- إرشادات صوتية تفاعلية أثناء المعايرة
+- تراكب مرئي لتوجيه المستخدم
+
+### 📸 التقاط دقيق (Body Capture)
+- التقاط صور الجسم من زوايا متعددة
+- معالجة فورية للصور
+- ضمان جودة الصورة
+
+### 📊 عرض النتائج (Results Display)
+- عرض القياسات بدقة عالية
+- مقارنة النتائج بمرور الوقت
+- واجهة سهلة الاستخدام
+
+---
+
+## 🚀 البدء السريع
+
+### المتطلبات الأساسية:
+- **Flutter SDK:** 3.0.0 أو أحدث
+- **Android Studio** أو **VS Code**
+- **جهاز اختبار:** Android (API 26+) أو iOS
+
+### التثبيت والتشغيل:
+
+```bash
+# 1. استنساخ المشروع
+git clone https://github.com/your-username/smart-measurement.git
+cd smart-measurement
+
+# 2. تثبيت التبعيات
+flutter pub get
+
+# 3. تشغيل التطبيق
+flutter run
+
+# 4. (اختياري) بناء APK للإصدار
+flutter build apk --release
+```
+
+### ⚠️ إذا ظهرت مشكلة "flutter is not recognized":
+
+استخدم المسار الكامل لـ Flutter:
+
+```powershell
+# Windows PowerShell
+C:\src\flutter\bin\flutter.bat pub get
+C:\src\flutter\bin\flutter.bat run
+```
+
+**أو** أضف Flutter للجلسة الحالية:
+
+```powershell
+$env:PATH = "C:\src\flutter\bin;$env:PATH"
+flutter pub get
+```
+
+📖 **للتفاصيل الكاملة:** راجع [FLUTTER_USAGE_GUIDE.md](FLUTTER_USAGE_GUIDE.md)
+
+---
+
+## 🏗️ البنية المعمارية
+
+### التقنيات المستخدمة:
+- **Frontend:** Flutter (Dart)
+- **State Management:** Riverpod 2.6.1
+- **AI/ML:** ONNX Runtime (YOLOv8 للكشف عن البطاقة)
+- **Camera:** Camera Plugin 0.10.6
+- **TTS:** Flutter TTS 3.8.5
+- **Image Processing:** Image Package 4.1.3
+
+### نمط التصميم:
+- **Feature-First Architecture**
+- **Provider Pattern** (Riverpod)
+- **Service Layer Pattern**
+- **Clean Architecture Principles**
+
+للحصول على وصف تفصيلي للبنية، راجع: [📁 PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
+
+---
+
+## 📦 التبعيات الرئيسية
+
+| المكتبة | الإصدار | الاستخدام |
+|---------|---------|------------|
+| `flutter_riverpod` | 2.6.1 | إدارة الحالة |
+| `camera` | 0.10.6 | الكاميرا |
+| `onnxruntime` | 1.19.0 | استدلال AI (ONNX) |
+| `flutter_tts` | 3.8.5 | تحويل النص إلى كلام |
+| `image` | 4.1.3 | معالجة الصور |
+| `vector_math` | 2.1.4 | عمليات رياضية |
+| `permission_handler` | 11.4.0 | أذونات التطبيق |
+
+---
+
+## 🤖 نموذج AI
+
+### YOLOv8 Card Detection Model:
+- **النوع:** Object Detection
+- **الصيغة:** ONNX
+- **الحجم:** ~12 MB
+- **الوظيفة:** كشف البطاقة المرجعية وزواياها الأربع
+- **المصدر:** [card-detection-yolo](https://github.com/OsmanMohamad249/card-detection-yolo)
+- **الموقع:** `assets/models/card_detector.onnx`
+
+---
+
+## 📂 هيكل المشروع
 
 ```
 lib/
-├── main.dart
-├── core/
-│   ├── services/
-│   │   ├── camera_service.dart      # Camera operations
-│   │   ├── tflite_service.dart      # YOLOv8 model inference
-│   │   └── guidance_manager.dart    # Text-to-speech feedback
-│   └── providers/
-│       └── providers.dart           # Riverpod providers
-└── features/
-    ├── calibration/
-    │   ├── presentation/
-    │   │   ├── screens/
-    │   │   │   └── smart_calibration_screen.dart
-    │   │   └── widgets/
-    │   │       ├── polygon_overlay.dart
-    │   │       └── calibration_guide.dart
-    │   ├── domain/
-    │   └── data/
-    ├── capture/
-    │   ├── presentation/
-    │   │   └── screens/
-    │   │       └── capture_screen.dart
-    │   ├── domain/
-    │   └── data/
-    └── results/
-        ├── presentation/
-        │   └── screens/
-        │       └── results_screen.dart
-        ├── domain/
-        └── data/
+├── main.dart                     # نقطة الدخول
+│
+├── core/                         # الوظائف الأساسية
+│   ├── providers/               # مزودات Riverpod
+│   ├── services/                # خدمات (Camera, ONNX, TTS)
+│   └── utils/                   # أدوات مساعدة
+│
+└── features/                    # الميزات (Feature-First)
+    ├── calibration/            # ميزة المعايرة
+    ├── capture/                # ميزة الالتقاط
+    └── results/                # ميزة النتائج
 ```
 
-## Core Services
+---
 
-### CameraService
-Manages camera initialization, preview streaming, and image capture for body measurement.
+## 🧹 حالة المشروع
 
-### TFLiteService
-Handles YOLOv8 pose estimation model loading and inference for detecting body keypoints.
+### ✅ تم التنظيف:
+- ✅ استخدام ONNX Runtime للاستدلال
+- ❌ حذف جميع الملفات المؤقتة والقديمة
+- ❌ إزالة المستندات المكررة (25+ ملف)
+- ✅ بنية نظيفة ومنظمة
 
-### GuidanceManager
-Provides text-to-speech audio feedback to guide users during the measurement process.
+للتفاصيل الكاملة، راجع: [🧹 CLEANUP_SUMMARY.md](CLEANUP_SUMMARY.md)
 
-## Dependencies
+---
 
-- `flutter_riverpod`: State management
-- `camera`: Camera access and preview
-- `flutter_tts`: Text-to-speech for guidance
-- `tflite_flutter`: TensorFlow Lite inference
-- `permission_handler`: Permission management
-- `path_provider`: File system access
+## 🛠️ الأوامر المفيدة
 
-## Getting Started
+```bash
+# تحديث التبعيات
+flutter pub get
 
-1. Clone the repository
-2. Run `flutter pub get`
-3. Add YOLOv8 pose model to `assets/yolov8_pose.tflite`
-4. Run `flutter run`
+# تنظيف المشروع
+flutter clean
 
-## Requirements
+# تحليل الكود
+flutter analyze
 
-- Flutter SDK >= 3.0.0
-- Android SDK >= 21
-- iOS >= 11.0
+# تشغيل الاختبارات
+flutter test
+
+# بناء APK (Debug)
+flutter build apk --debug
+
+# بناء APK (Release)
+flutter build apk --release
+
+# بناء AAB (Google Play)
+flutter build appbundle --release
+```
+
+---
+
+## 📱 الأذونات المطلوبة
+
+### Android (`AndroidManifest.xml`):
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+```
+
+### iOS (`Info.plist`):
+```xml
+<key>NSCameraUsageDescription</key>
+<string>هذا التطبيق يحتاج إلى الكاميرا لالتقاط صور القياسات</string>
+```
+
+---
+
+## 🎯 خارطة الطريق
+
+- [x] ✅ معايرة ذكية مع كشف البطاقة
+- [x] ✅ كشف نقاط الجسم الرئيسية (Pose Detection)
+- [x] ✅ إرشادات صوتية تفاعلية
+- [ ] ⏳ حساب القياسات الدقيقة
+- [ ] ⏳ حفظ واسترجاع النتائج
+- [ ] ⏳ مقارنة القياسات بمرور الوقت
+- [ ] ⏳ تصدير التقارير (PDF)
+
+---
+
+## 🐛 الإبلاغ عن المشاكل
+
+إذا واجهت أي مشكلة، يرجى:
+1. التحقق من [CLEANUP_SUMMARY.md](CLEANUP_SUMMARY.md) للملفات المحذوفة
+2. التحقق من [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) للبنية الصحيحة
+3. فتح Issue على GitHub مع:
+   - وصف المشكلة
+   - خطوات إعادة إنتاج المشكلة
+   - رسائل الخطأ
+   - معلومات البيئة (Flutter version, OS, etc.)
+
+---
+
+## 📄 الترخيص
+
+هذا المشروع مرخص تحت رخصة [COPYRIGHT](Copyright).
+
+---
+
+## 👨‍💻 المساهمة
+
+المساهمات مرحب بها! يرجى:
+1. عمل Fork للمشروع
+2. إنشاء فرع جديد (`git checkout -b feature/amazing-feature`)
+3. تنفيذ التغييرات (`git commit -m 'Add amazing feature'`)
+4. رفع التغييرات (`git push origin feature/amazing-feature`)
+5. فتح Pull Request
+
+---
+
+## 📞 التواصل
+
+للأسئلة أو الاستفسارات، يمكنك التواصل عبر:
+- **GitHub Issues:** [فتح Issue](https://github.com/your-username/smart-measurement/issues)
+- **Email:** your-email@example.com
+
+---
+
+**آخر تحديث:** 4 ديسمبر 2025  
+**الحالة:** ✅ جاهز للتطوير والبناء  
+**الإصدار:** 1.0.0+1
+
+---
+
+**صنع بـ ❤️ باستخدام Flutter & AI**
+

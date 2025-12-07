@@ -1,8 +1,11 @@
 import 'package:camera/camera.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/camera_service.dart';
-import '../services/tflite_service.dart';
+import '../services/onnx_inference_service.dart';
 import '../services/guidance_manager.dart';
+import '../services/stability_detector.dart';
+import '../services/auto_capture_manager.dart';
+import '../services/reactive_guidance_manager.dart';
 
 
 /// Provider for the CameraService.
@@ -13,9 +16,9 @@ final cameraServiceProvider = Provider<CameraService>((ref) {
 });
 
 
-/// Provider for the TFLiteService (pose detection).
-final tfliteServiceProvider = Provider<TFLiteService>((ref) {
-  final service = TFLiteService();
+/// Provider for the OnnxInferenceService (pose detection).
+final onnxInferenceServiceProvider = Provider<OnnxInferenceService>((ref) {
+  final service = OnnxInferenceService();
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -24,6 +27,28 @@ final tfliteServiceProvider = Provider<TFLiteService>((ref) {
 final guidanceManagerProvider = Provider<GuidanceManager>((ref) {
   final manager = GuidanceManager();
   ref.onDispose(() => manager.dispose());
+  return manager;
+});
+
+/// Provider for the StabilityDetector.
+final stabilityDetectorProvider = Provider<StabilityDetector>((ref) {
+  final detector = StabilityDetector();
+  ref.onDispose(detector.dispose);
+  return detector;
+});
+
+/// Provider for the AutoCaptureManager.
+final autoCaptureManagerProvider = Provider<AutoCaptureManager>((ref) {
+  final manager = AutoCaptureManager();
+  ref.onDispose(manager.dispose);
+  return manager;
+});
+
+/// Provider for the ReactiveGuidanceManager.
+final reactiveGuidanceManagerProvider = Provider<ReactiveGuidanceManager>((ref) {
+  final guidanceManager = ref.watch(guidanceManagerProvider);
+  final manager = ReactiveGuidanceManager(guidanceManager);
+  ref.onDispose(manager.dispose);
   return manager;
 });
 

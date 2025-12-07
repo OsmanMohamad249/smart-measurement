@@ -1,0 +1,23 @@
+{
+  "model_name": "Card Corner Detector v3 - High Accuracy",
+  "model_type": "YOLOv8s-OBB",
+  "input_size": 640,
+  "output_format": "OBB (4 corners)",
+  "output_shape": "(1, 6, 8400)",
+  "classes": [
+    "card"
+  ],
+  "card_aspect_ratio": {
+    "standard_width_mm": 85.6,
+    "standard_height_mm": 53.98,
+    "ratio": 1.586
+  },
+  "features": [
+    "Corner detection in extreme conditions",
+    "Low light / darkness support",
+    "Partial occlusion handling",
+    "Automatic aspect ratio correction",
+    "Hidden corner estimation"
+  ],
+  "description": "High accuracy model for card detection and corner extraction"
+}
