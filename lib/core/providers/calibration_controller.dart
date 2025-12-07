@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +21,7 @@ import 'providers.dart'; // Import to access provider definitions
 /// 3. Validates corner geometry
 /// 4. Computes homography and mm_per_pixel scale
 /// 5. Persists calibration result for downstream measurements
+
 class CalibrationController extends StateNotifier<CalibrationControllerState> {
   final CameraService _cameraService;
   final OnnxInferenceService _onnxService;
@@ -59,12 +60,12 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       state = state.copyWith(countdownValue: countdown);
     };
     _autoCaptureManager.onCapture = () {
-      // ✅ CRITICAL: Only finalize if we have valid corners
+      // âœ… CRITICAL: Only finalize if we have valid corners
       if (_latestCorners != null && _latestCorners!.length == 4) {
-        debugPrint('CalibrationController: ✅ Auto-capture triggered with valid corners');
+        debugPrint('CalibrationController: âœ… Auto-capture triggered with valid corners');
         _finalizeCalibration(_latestCorners!);
       } else {
-        debugPrint('CalibrationController: ❌ Auto-capture blocked - no valid corners');
+        debugPrint('CalibrationController: âŒ Auto-capture blocked - no valid corners');
         // Reset auto-capture to wait for valid detection
         _autoCaptureManager.reset();
       }
@@ -85,7 +86,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       stabilityScore: 0.0,
     );
 
-    // ✅ FIXED: Card should be held at chest level, not on a surface
+    // âœ… FIXED: Card should be held at chest level, not on a surface
     await _guidanceManager.speak(
       'Hold the reference card at chest level in front of your body. '
       'Stand straight, 2 meters from the camera.'
@@ -143,7 +144,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       
       // Check if card was detected
       if (corners.isEmpty || corners.length < 4) {
-        // ✅ CRITICAL: Clear latestCorners to prevent false calibration
+        // âœ… CRITICAL: Clear latestCorners to prevent false calibration
         _latestCorners = null;
         _autoCaptureManager.checkConditions(
           isStable: false,
@@ -167,31 +168,31 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
           .toList()
           .cast<Vector2>();
 
-      // ✅ CRITICAL: Use high confidence threshold to ensure REAL card detection
+      // âœ… CRITICAL: Use high confidence threshold to ensure REAL card detection
       // The model must be VERY confident this is an actual card, not just any rectangle
       const double minConfidenceThreshold = 0.70; // Increased from 0.40 to 0.70
 
-      // ✅ CRITICAL: Validate corner geometry before accepting
+      // âœ… CRITICAL: Validate corner geometry before accepting
       // Convert normalized coordinates to pixel coordinates for validation
-      const int modelInputSize = 640;
+      // 416 defined at class level
       final pixelCornersForValidation = cornerVectors.map((c) => Vector2(
-        c.x * modelInputSize,
-        c.y * modelInputSize,
+        c.x * 416,
+        c.y * 416,
       )).toList();
 
       // Validate corners form a proper card shape with correct aspect ratio
       final bool validGeometry = HomographyUtils.validateCardCorners(
         pixelCornersForValidation,
-        minArea: 5000, // Minimum 5000 pixels² to ensure card is not too small
-        aspectTolerance: 0.25, // ±25% tolerance on aspect ratio
+        minArea: 5000, // Minimum 5000 pixelsÂ² to ensure card is not too small
+        aspectTolerance: 0.25, // Â±25% tolerance on aspect ratio
       );
 
       final isCardDetected = corners.length == 4 &&
                              calibrationResult.confidence >= minConfidenceThreshold &&
-                             validGeometry; // ✅ CRITICAL: Must pass geometry validation
+                             validGeometry; // âœ… CRITICAL: Must pass geometry validation
 
       if (!isCardDetected) {
-        // ✅ CRITICAL: Clear latestCorners to prevent false calibration
+        // âœ… CRITICAL: Clear latestCorners to prevent false calibration
         _latestCorners = null;
         _autoCaptureManager.checkConditions(
           isStable: false,
@@ -222,7 +223,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
         return;
       }
 
-      // ✅ Only set latestCorners AFTER validation passes
+      // âœ… Only set latestCorners AFTER validation passes
       _latestCorners = cornerVectors;
 
       debugPrint('CalibrationController: Valid card detected! conf=${calibrationResult.confidence.toStringAsFixed(3)}');
@@ -231,10 +232,10 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       double quality = 0.0;
       try {
         // Convert normalized coordinates to pixel coordinates for homography
-        const int modelInputSize = 640;
+        // 416 defined at class level
         final pixelCorners = cornerVectors.map((c) => Vector2(
-          c.x * modelInputSize,
-          c.y * modelInputSize,
+          c.x * 416,
+          c.y * 416,
         )).toList();
 
         final homography = HomographyUtils.computeHomography(pixelCorners, 640, 400);
@@ -254,10 +255,10 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
       );
 
       // Convert to pixel coords for tilt calculation
-      const int modelInputSize = 640;
+      // 416 defined at class level
       final pixelCornersForTilt = cornerVectors.map((c) => Vector2(
-        c.x * modelInputSize,
-        c.y * modelInputSize,
+        c.x * 416,
+        c.y * 416,
       )).toList();
 
       _reactiveGuidanceManager.analyzeAndGuide(
@@ -283,9 +284,9 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
 
   /// Finalizes calibration by computing homography and scale factor.
   Future<void> _finalizeCalibration(List<Vector2> corners) async {
-    // ✅ CRITICAL: Validate corners before proceeding
+    // âœ… CRITICAL: Validate corners before proceeding
     if (corners.length != 4) {
-      debugPrint('CalibrationController: ❌ Cannot finalize - invalid corners count: ${corners.length}');
+      debugPrint('CalibrationController: âŒ Cannot finalize - invalid corners count: ${corners.length}');
       _handleCalibrationError('Invalid card detection. Please try again.');
       return;
     }
@@ -293,7 +294,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
     // Validate corner values are reasonable (normalized 0-1)
     for (int i = 0; i < corners.length; i++) {
       if (corners[i].x < 0 || corners[i].x > 1 || corners[i].y < 0 || corners[i].y > 1) {
-        debugPrint('CalibrationController: ❌ Invalid corner $i: (${corners[i].x}, ${corners[i].y})');
+        debugPrint('CalibrationController: âŒ Invalid corner $i: (${corners[i].x}, ${corners[i].y})');
         _handleCalibrationError('Invalid card position. Please try again.');
         return;
       }
@@ -309,12 +310,12 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
     await _guidanceManager.speak('Calibration complete');
 
     try {
-      // ✅ Convert normalized coordinates (0-1) to pixel coordinates
+      // âœ… Convert normalized coordinates (0-1) to pixel coordinates
       // Using 640x640 as the model input size
-      const int modelInputSize = 640;
+      // 416 defined at class level
       final pixelCorners = corners.map((c) => Vector2(
-        c.x * modelInputSize,
-        c.y * modelInputSize,
+        c.x * 416,
+        c.y * 416,
       )).toList();
 
       debugPrint('CalibrationController: Pixel corners:');
@@ -322,13 +323,13 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
         debugPrint('  Corner $i: (${pixelCorners[i].x.toStringAsFixed(1)}, ${pixelCorners[i].y.toStringAsFixed(1)})');
       }
 
-      // ✅ Compute mm_per_pixel directly from corner positions
+      // âœ… Compute mm_per_pixel directly from corner positions
       // This is simpler and more accurate than using homography for scale
       final mmPerPixel = HomographyUtils.computeMmPerPixelFromCorners(pixelCorners);
 
       debugPrint('CalibrationController: Computed mm_per_pixel = ${mmPerPixel.toStringAsFixed(4)}');
 
-      // ✅ Also compute homography for potential perspective corrections
+      // âœ… Also compute homography for potential perspective corrections
       const int canonicalWidth = 640;
       const int canonicalHeight = 400; // Maintains card aspect ratio (85.6:53.98)
       final homography = HomographyUtils.computeHomography(
@@ -337,7 +338,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
         canonicalHeight,
       );
 
-      // ✅ Validate homography quality
+      // âœ… Validate homography quality
       final quality = HomographyUtils.validateHomographyQuality(
         homography,
         pixelCorners,
@@ -358,7 +359,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
         progress: 1.0,
       );
 
-      debugPrint('✅ Calibration completed successfully:');
+      debugPrint('âœ… Calibration completed successfully:');
       debugPrint('  mm_per_pixel: $mmPerPixel');
       debugPrint('  Quality: ${(quality * 100).toStringAsFixed(1)}%');
     } catch (e) {
@@ -423,6 +424,7 @@ class CalibrationController extends StateNotifier<CalibrationControllerState> {
 }
 
 /// State for the calibration controller.
+
 class CalibrationControllerState {
   final CalibrationStatus status;
   final String statusMessage;
@@ -506,3 +508,6 @@ final calibrationControllerProvider =
     );
   },
 );
+
+
+
